@@ -152,8 +152,9 @@ pipeline {
                 // Retry up to 5 times before failing
                 retry(5) {
                     sh """
-                        echo '🔍  Probing http://localhost:${TEST_PORT} ...'
-                        STATUS=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:${TEST_PORT})
+                        TEST_IP=\$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${TEST_CONTAINER})
+                        echo "🔍  Probing http://\$TEST_IP:80 ..."
+                        STATUS=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://\$TEST_IP:80)
                         echo "    HTTP status: \$STATUS"
                         if [ "\$STATUS" != "200" ]; then
                             echo "❌  Health check attempt FAILED (HTTP \$STATUS) — retrying..."
