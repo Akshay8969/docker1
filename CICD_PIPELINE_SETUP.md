@@ -1,121 +1,237 @@
-# CI/CD Pipeline Setup with Jenkins & Docker
+# Finance Tracker — Jenkins CI/CD Pipeline Setup Guide
 
-This document outlines the steps taken to create a fully automated CI/CD pipeline where Jenkins pulls code from GitHub, builds a new Docker image, and automatically runs the application.
-
----
-
-## Architecture Overview
-
-1. **SCM (Source Control Management):** GitHub Repository (`docker1`)
-2. **CI/CD Server:** Local Jenkins container running with Docker socket access
-3. **Pipeline Definition:** Declarative `Jenkinsfile` stored in the root of the repository
-4. **Deployment Target:** Local Docker daemon (running the app container on port `3000`)
+> **Stack:** Jenkins (Docker) → GitHub → Docker Hub → AWS EC2  
+> **App:** React + Vite, served via nginx inside a Docker container
 
 ---
 
-## Step 1 — Create the `Jenkinsfile`
+## Architecture
 
-A `Jenkinsfile` was added to the repository to define the pipeline stages.
-
-```groovy
-pipeline {
-    agent any
-
-    environment {
-        IMAGE_NAME    = 'akshay8969/finance-tracker'
-        CONTAINER_NAME = 'finance-tracker-app'
-        APP_PORT      = '3000'
-    }
-
-    stages {
-        stage('Checkout') {
-            steps {
-                echo 'Pulling latest code from GitHub...'
-                git branch: 'main', url: 'https://github.com/Unlicensed-Mystic/docker1.git'
-            }
-        }
-        stage('Build Docker Image') {
-            steps {
-                echo "Building Docker image..."
-                sh "docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} -t ${IMAGE_NAME}:latest ."
-            }
-        }
-        stage('Deploy Container') {
-            steps {
-                echo 'Stopping existing container...'
-                sh "docker stop ${CONTAINER_NAME} || true"
-                sh "docker rm   ${CONTAINER_NAME} || true"
-
-                echo "Starting new container on port ${APP_PORT}..."
-                sh """
-                    docker run -d \
-                        -p ${APP_PORT}:80 \
-                        --name ${CONTAINER_NAME} \
-                        --restart always \
-                        ${IMAGE_NAME}:latest
-                """
-            }
-        }
-        stage('Verify') {
-            steps {
-                sh "docker ps --filter name=${CONTAINER_NAME}"
-                echo "Application deployed at http://localhost:${APP_PORT}"
-            }
-        }
-    }
-}
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      CI/CD Flow                                 │
+│                                                                 │
+│  GitHub Repo          Jenkins Agent           AWS EC2           │
+│  ┌──────────┐  push   ┌──────────────────┐   ┌──────────────┐  │
+│  │ docker1  │────────>│ 1. Checkout      │   │ Docker       │  │
+│  │ (main)   │         │ 2. Install+Lint  │   │ container    │  │
+│  └──────────┘         │ 3. Docker Build  │   │ :3000        │  │
+│                       │ 4. Health Check  │   └──────────────┘  │
+│  Docker Hub           │ 5. Push Image ───┼──>  Docker Hub       │
+│  ┌──────────┐         │ 6. Deploy EC2 ───┼──>  EC2 (SSH+pull)  │
+│  │ akshay   │         │ 7. Smoke Test    │                     │
+│  │ 8969/... │         └──────────────────┘                     │
+│  └──────────┘                                                   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Step 2 — Configure Jenkins for Docker Access
+## Prerequisites
 
-Because Jenkins runs *inside* a Docker container, it needs permission to execute Docker commands on the host machine in order to build and run the application.
+| Requirement | Details |
+|---|---|
+| Jenkins | Running as Docker container with Docker socket mounted |
+| Docker Hub account | `akshay8969` — already configured |
+| AWS EC2 instance | Ubuntu, Docker installed, port 3000 open in Security Group |
+| EC2 SSH key pair | `.pem` file available |
 
-1. **Run Jenkins with Docker Socket mapped:**
+---
+
+## Step 1 — Run Jenkins with Docker Socket Access
+
 ```bash
-docker run -d -p 8080:8080 -p 50000:50000 \
+docker run -d \
+  -p 8080:8080 \
+  -p 50000:50000 \
   --name jenkins \
   --restart=on-failure \
   -v jenkins_home:/var/jenkins_home \
-  -v /var/run/docker.sock:/var/run/docker.sock \ # Mapped the Docker socket
+  -v /var/run/docker.sock:/var/run/docker.sock \
   jenkins/jenkins:lts-jdk21
 ```
 
-2. **Install Docker CLI inside Jenkins container & fix permissions:**
+### Install Docker CLI inside Jenkins container
+
 ```bash
-docker exec -u root jenkins bash -c "apt-get update && apt-get install -y docker.io"
-docker exec -u root jenkins chmod 666 /var/run/docker.sock
+# Install Docker CLI
+docker exec -u root jenkins bash -c "
+  apt-get update && \
+  apt-get install -y docker.io curl && \
+  chmod 666 /var/run/docker.sock
+"
+
+# Verify Docker works inside Jenkins
+docker exec jenkins docker ps
+```
+
+### Install required Jenkins plugins
+
+Go to **Manage Jenkins → Plugins → Available plugins** and install:
+- **Docker Pipeline**
+- **SSH Agent**
+- **Credentials Binding**
+- **Timestamper**
+- **Git**
+
+---
+
+## Step 2 — Configure Credentials in Jenkins
+
+Navigate to: **Manage Jenkins → Credentials → (global) → Add Credentials**
+
+### Credential 1 — Docker Hub
+
+| Field | Value |
+|---|---|
+| Kind | Username with password |
+| Username | `akshay8969` |
+| Password | Your Docker Hub password / access token |
+| ID | `dockerhub-credentials` ← **must match Jenkinsfile** |
+
+### Credential 2 — EC2 SSH Key
+
+| Field | Value |
+|---|---|
+| Kind | SSH Username with private key |
+| Username | `ubuntu` (or `ec2-user` for Amazon Linux) |
+| Private Key | Paste the contents of your `.pem` key file |
+| ID | `ec2-ssh-key` ← **must match Jenkinsfile** |
+
+---
+
+## Step 3 — Configure EC2 Host (Global Environment Variable)
+
+Go to **Manage Jenkins → System → Global properties → Environment variables**
+
+| Name | Value |
+|---|---|
+| `EC2_HOST` | Your EC2 Public IP (e.g., `54.123.45.67`) |
+| `EC2_USER` | `ubuntu` |
+
+> Alternatively, edit the `EC2_HOST` value directly in the `Jenkinsfile`.
+
+---
+
+## Step 4 — Prepare the EC2 Instance
+
+SSH into your EC2 instance and install Docker:
+
+```bash
+# Connect
+ssh -i your-key.pem ubuntu@<EC2_PUBLIC_IP>
+
+# Install Docker
+sudo apt-get update
+sudo apt-get install -y docker.io
+
+# Start Docker and allow ubuntu user to run it
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo usermod -aG docker ubuntu
+
+# Log out and back in for group change to take effect
+exit
+```
+
+**Open EC2 Security Group inbound rules:**
+- Port `22` (SSH) — from Jenkins agent IP
+- Port `3000` (App) — from `0.0.0.0/0` (or your IP)
+
+---
+
+## Step 5 — Create the Jenkins Pipeline Job
+
+1. Open Jenkins at `http://localhost:8080`
+2. Click **New Item**
+3. Name it `finance-tracker-pipeline` → Select **Pipeline** → Click **OK**
+4. Under **Build Triggers**, optionally check:
+   - ✅ **GitHub hook trigger for GITScm polling** (requires GitHub webhook)
+   - Or: **Poll SCM** with schedule `H/5 * * * *` (poll every 5 min)
+5. Scroll to **Pipeline** section:
+   - **Definition:** `Pipeline script from SCM`
+   - **SCM:** `Git`
+   - **Repository URL:** `https://github.com/Unlicensed-Mystic/docker1.git`
+   - **Branch Specifier:** `*/main`
+   - **Script Path:** `Jenkinsfile`
+6. Click **Save**
+
+---
+
+## Step 6 — Run the Pipeline
+
+Click **Build Now** — the pipeline will execute these 7 stages:
+
+| # | Stage | What Happens |
+|---|---|---|
+| 1 | **Checkout** | Pulls latest code from `main`; sets `IMAGE_TAG = BUILD_NUMBER-COMMIT` |
+| 2 | **Install & Lint** | `npm ci` inside Node container; validates source files |
+| 3 | **Build Docker Image** | `docker build` with OCI labels and two tags |
+| 4 | **Health Validation** | Runs image locally on port `3001`; `curl` checks HTTP 200 (5 retries) |
+| 5 | **Push to Docker Hub** | Pushes `:<tag>` and `:latest` to `akshay8969/finance-tracker` |
+| 6 | **Deploy to EC2** | SSH → pull image → stop old container → start new with `--restart unless-stopped` |
+| 7 | **Smoke Test (EC2)** | SSHes in; curls `localhost:3000` up to 5 times; prints logs on failure |
+
+On **success**, the app is live at:
+```
+http://<EC2_PUBLIC_IP>:3000
 ```
 
 ---
 
-## Step 3 — Create Pipeline Job in Jenkins UI
+## Troubleshooting
 
-1. Open Jenkins at `http://localhost:8080`
-2. Click **New Item** → Name it `finance-tracker-pipeline` → Select **Pipeline**
-3. Scroll down to the **Pipeline** section
-4. Set **Definition** to **Pipeline script from SCM**
-5. Set **SCM** to **Git**
-6. Enter the **Repository URL**: `https://github.com/Unlicensed-Mystic/docker1.git`
-7. Set **Branch Specifier** to `*/main`
-8. Set **Script Path** to `Jenkinsfile`
-9. Click **Save**
+### ❌ `docker: command not found` in Jenkins
+
+```bash
+docker exec -u root jenkins apt-get install -y docker.io
+docker exec -u root jenkins chmod 666 /var/run/docker.sock
+```
+
+### ❌ Health check fails (port already in use)
+
+```bash
+docker rm -f finance-tracker-healthcheck
+```
+
+### ❌ SSH connection to EC2 refused
+
+- Ensure Security Group allows **port 22** from Jenkins agent IP
+- Verify the `.pem` file is correctly pasted into the Jenkins credential
+
+### ❌ Docker pull fails on EC2 (rate limit)
+
+- Use a Docker Hub Personal Access Token instead of password
+- Or add `--registry-mirror` to EC2's Docker daemon
+
+### ❌ App returns 502 / blank page on EC2
+
+```bash
+# On EC2:
+docker logs finance-tracker-app --tail 100
+docker inspect finance-tracker-app
+```
 
 ---
 
-## Step 4 — Run and Verify the Pipeline
+## Image Tagging Strategy
 
-1. In Jenkins, click **Build Now** on the left menu.
-2. The pipeline progresses through 4 stages:
-   - **Checkout:** Pulls the newest code and `Jenkinsfile` from GitHub.
-   - **Build Docker Image:** Uses `docker build` to create a fresh image.
-   - **Deploy Container:** Eliminates the old instance and runs `docker run` with the newly built image.
-   - **Verify:** Checks the container instance.
-3. Once completed, the application goes live automatically at **[http://localhost:3000](http://localhost:3000)**.
+```
+akshay8969/finance-tracker:<BUILD_NUMBER>-<SHORT_COMMIT>   ← immutable, traceable
+akshay8969/finance-tracker:latest                          ← always points to newest
+```
+
+Every image is labelled with:
+- `org.opencontainers.image.created`
+- `org.opencontainers.image.revision` (git commit)
+- `org.opencontainers.image.version`
+
 ---
 
-<img width="1915" height="1013" alt="Screenshot 2026-04-17 215213" src="https://github.com/user-attachments/assets/466e77f1-f9d2-4f47-ad92-c54532eeba0b" />
-<img width="1919" height="1008" alt="Screenshot 2026-04-17 224530" src="https://github.com/user-attachments/assets/88f8e235-0047-4513-bc22-05e00aba03ea" />
+## Pipeline Screenshots
 
+<!-- Add your Jenkins build screenshots here -->
 
+---
+
+*Last updated: May 2026*
