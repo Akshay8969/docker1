@@ -8,7 +8,7 @@ This repository contains the source code, Docker configuration, and the fully au
 
 **Public URL:** [http://16.171.250.60:3000](http://16.171.250.60:3000)
 
-> Hosted on an AWS EC2 `t2.micro` instance (Ubuntu) via an automated Jenkins Pipeline.
+> Hosted on an AWS EC2 instance (Ubuntu) via an automated Jenkins Pipeline.
 
 ---
 
