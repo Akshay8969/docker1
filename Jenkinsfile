@@ -206,8 +206,15 @@ pipeline {
                         passwordVariable: 'DOCKER_PASS'
                     )
                 ]) {
-                    // Write a remote deploy script and execute it via SSH
+                    // Execute Docker login directly so Jenkins Bash interpolates credentials properly
                     sh """
+                        ssh -i \$SSH_KEY \\
+                            -o StrictHostKeyChecking=no \\
+                            -o ConnectTimeout=30 \\
+                            -o ServerAliveInterval=10 \\
+                            ${EC2_USER}@${EC2_HOST} \\
+                            "echo '\$DOCKER_PASS' | docker login -u '\$DOCKER_USER' --password-stdin"
+
                         ssh -i \$SSH_KEY \\
                             -o StrictHostKeyChecking=no \\
                             -o ConnectTimeout=30 \\
@@ -216,9 +223,6 @@ pipeline {
                             "bash -s" <<'REMOTE'
 
                         set -e
-
-                        echo "==> [EC2] Authenticating with Docker Hub"
-                        echo "\${DOCKER_PASS}" | docker login -u "\${DOCKER_USER}" --password-stdin
 
                         echo "==> [EC2] Pulling image: ${IMAGE_NAME}:${env.IMAGE_TAG}"
                         docker pull ${IMAGE_NAME}:${env.IMAGE_TAG}
