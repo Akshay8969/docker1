@@ -1,14 +1,29 @@
-# Personal Finance Tracker - Docker Deployment
+# Personal Finance Tracker - Docker & Jenkins CI/CD Deployment
 
-This repository contains the source code, Docker configuration, and deployment artifacts for the Personal Finance Tracker application as part of the Docker + AWS EC2 assignment.
+This repository contains the source code, Docker configuration, and the fully automated Jenkins CI/CD Pipeline for the Personal Finance Tracker application.
 
 ---
 
 ## 🌐 Live Deployment (AWS EC2)
 
-**Public URL:** [http://16.171.241.129](http://16.171.241.129)
+**Public URL:** [http://16.171.250.60:3000](http://16.171.250.60:3000)
 
-> Hosted on an AWS EC2 `t2.micro` instance (Ubuntu 24.04 LTS) with Docker.
+> Hosted on an AWS EC2 `t2.micro` instance (Ubuntu) via an automated Jenkins Pipeline.
+
+---
+
+## ⚙️ Automated CI/CD Pipeline (Jenkins)
+
+This project features a complete, 7-stage CI/CD pipeline (`Jenkinsfile`) that automates:
+1. **Source Checkout** from GitHub.
+2. **NPM Install & Linting** inside an ephemeral Node container.
+3. **Multi-stage Docker Build** with OCI labels.
+4. **Health Validation** on a local test container (HTTP 200 check).
+5. **Pushing** the verified image to Docker Hub.
+6. **Automated SSH Deployment** to AWS EC2 (pulls new image, stops old container, runs new container on port 3000).
+7. **Production Smoke Test** against the live EC2 endpoint.
+
+For detailed setup instructions, see the [CICD_PIPELINE_SETUP.md](./CICD_PIPELINE_SETUP.md) guide.
 
 ---
 
@@ -22,39 +37,9 @@ docker pull akshay8969/finance-tracker:latest
 
 ---
 
-## ☁️ AWS EC2 Deployment — Commands Used
+## 💻 Run Locally
 
-### 1. SSH into EC2 Instance
-```bash
-ssh -i "finance-key.pem" ubuntu@16.171.241.129
-```
-
-### 2. Install Docker on EC2
-```bash
-sudo apt-get update -y
-sudo apt-get install -y docker.io
-sudo systemctl start docker
-sudo systemctl enable docker
-sudo usermod -aG docker ubuntu
-newgrp docker
-```
-
-### 3. Pull Image from DockerHub & Run
-```bash
-docker pull akshay8969/finance-tracker:latest
-docker run -d -p 80:80 --name finance-tracker --restart always akshay8969/finance-tracker:latest
-```
-
-### 4. Verify Container is Running
-```bash
-docker ps
-```
-
-App is now accessible at: **http://16.171.241.129**
-
----
-
-## 💻 Run Locally (from DockerHub)
+To run the application manually on your local machine:
 
 ```bash
 docker pull akshay8969/finance-tracker:latest
@@ -69,7 +54,9 @@ Visit: [http://localhost:8080](http://localhost:8080)
 
 | File/Folder | Description |
 |---|---|
+| `Jenkinsfile` | Declarative Jenkins CI/CD pipeline configuration |
+| `CICD_PIPELINE_SETUP.md`| Comprehensive guide to setting up the CI/CD architecture |
 | `Dockerfile` | Multi-stage build (Node 20 Alpine → Nginx Alpine) |
 | `nginx.conf` | Custom Nginx config for React SPA routing |
 | `src/` | React + Vite application source code |
-| `FintrackDockerScreenshots/` | Screenshots of Websie, image, docker and EC2 instance |
+| `FintrackDockerScreenshots/` | Screenshots of Website, image, docker and EC2 instance |
